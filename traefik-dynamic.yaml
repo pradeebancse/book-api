@@ -1,0 +1,23 @@
+# traefik-dynamic.yaml
+http:
+  middlewares:
+    # Google OAuth Middleware
+    google-auth:
+      forwardAuth:
+        address: "http://oauth-service:4181"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "X-Forwarded-User"
+          - "X-Forwarded-Email"
+    
+    # Role-based Middlewares
+    admin-role:
+      headers:
+        customRequestHeaders:
+          X-User-Role: "admin"
+          X-Required-Role: "admin"
+    
+    any-role:
+      headers:
+        customRequestHeaders:
+          X-Required-Role: "any"
