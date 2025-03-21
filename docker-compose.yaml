@@ -1,0 +1,93 @@
+# docker-compose.yml
+version: '3'
+
+services:
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    command:
+      - "--api.insecure=true"  # Dashboard
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/traefik-dynamic.yaml"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"  # API and Dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik-dynamic.yaml:/traefik-dynamic.yaml
+    labels:
+      - "traefik.enable=true"
+      
+  api:
+    build: .  # Your Go API app
+    container_name: book-api
+    labels:
+      - "traefik.enable=true"
+      # Main HTTP Route
+      - "traefik.http.routers.api.rule=Host(`localhost`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+      # Strip prefix to route correctly to the API
+      - "traefik.http.middlewares.strip-api-prefix.stripprefix.prefixes=/api"
+      # Apply middlewares
+      - "traefik.http.routers.api.middlewares=google-auth@file,role-auth,strip-api-prefix"
+      
+      # Books GET endpoint - available to all authenticated users
+      - "traefik.http.routers.books-get.rule=Host(`localhost`) && Path(`/api/books`) && Method(`GET`)"
+      - "traefik.http.routers.books-get.middlewares=google-auth@file,any-role@file,role-auth,strip-api-prefix"
+      
+      # Books POST endpoint - admin only
+      - "traefik.http.routers.books-post.rule=Host(`localhost`) && Path(`/api/books`) && Method(`POST`)"
+      - "traefik.http.routers.books-post.middlewares=google-auth@file,admin-role@file,role-auth,strip-api-prefix"
+      
+      # User role update endpoint - admin only
+      - "traefik.http.routers.user-role.rule=Host(`localhost`) && Path(`/api/users/role`) && Method(`PUT`)"
+      - "traefik.http.routers.user-role.middlewares=google-auth@file,admin-role@file,role-auth,strip-api-prefix"
+      
+      # Define the role-auth middleware
+      - "traefik.http.middlewares.role-auth.forwardauth.address=http://auth-middleware:4000/auth"
+      - "traefik.http.middlewares.role-auth.forwardauth.authResponseHeaders=X-User-Email,X-User-Role"
+
+  oauth-service:
+    image: thomseddon/traefik-forward-auth:latest
+    container_name: oauth-service
+    environment:
+      # Google OAuth Settings
+      - CLIENT_ID=808270046782-34d0j7ntd6f7grfk5eplugdp9sgs3g63.apps.googleusercontent.com
+      - CLIENT_SECRET=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
+      - SECRET=something-random-for-development
+      - AUTH_HOST=localhost
+      - COOKIE_DOMAIN=localhost
+      - COOKIE_SECURE=false  # For local development without HTTPS
+      - LIFETIME=3600
+      - WHITELIST=*@gmail.com,*@example.com  # Allow Gmail accounts
+      - DEFAULT_ACTION=allow  # For easier local testing
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.oauth.rule=Host(`localhost`) && Path(`/oauth`)"
+      - "traefik.http.routers.oauth.entrypoints=web"
+      - "traefik.http.services.oauth.loadbalancer.server.port=4181"
+  
+  auth-middleware:
+    build:
+      context: ./auth-middleware
+      dockerfile: Dockerfile
+    container_name: auth-middleware
+    depends_on:
+      - db
+
+  db:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"  # Expose for local development
+      
+volumes:
+  pgdata:
